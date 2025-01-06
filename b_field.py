@@ -89,6 +89,219 @@ Mpcincm		= c.parsec*1e6
 G			= 6.67e-8
 H_0			= 2.17e-18
 
+# ============ FUNCTIONS ============ #
+#Calculate the virial temperature - the average temperature of a gravitationally bound system.
+def virialTemp(snap, halo, halo_d):
+
+	#element number   0     1      2      3      4      5      6      7      8      9      10     11     12      13
+	elements       = ['H',  'He',  'C',   'N',   'O',   'Ne',  'Mg',  'Si',  'Fe',  'Y',   'Sr',  'Zr',  'Ba',   'Pb']
+	elements_Z     = [1,    2,     6,     7,     8,     10,    12,    14,    26,    39,    38,    40,    56,     82]
+	elementsMass  = [1.01, 4.00,  12.01, 14.01, 16.00, 20.18, 24.30, 28.08, 55.85, 88.91, 87.62, 91.22, 137.33, 207.2]
+	elements_solar = [12.0, 10.93, 8.43,  7.83,  8.69,  7.93,  7.60,  7.51,  7.50,  2.21,  2.87,  2.58,  2.18,   1.75]
+
+	m_h = 1.67e-24
+	k = 1.38e-16
+	G = 6.67e-8
+	H_0 = 2.17e-18
+	m_halo = subload.data['fmc2'][0]*1.989e43
+	meanweight = sum(load.gmet[:,0:9], axis = 1) / ( sum(load.gmet[:,0:9]/elementsMass[0:9], axis = 1) + load.ne*load.gmet[:,0] )
+	meanweight = sum(meanweight)/len(meanweight)
+
+	print(meanweight)
+	print(m_halo)
+
+	T_vir = ((G**2)*(H_0**2)*(load.omega0)*18*(np.pi**2)/54)**(1/3)*(meanweight*m_h/k)*((m_halo**(2/3))*(1+load.redshift))
+	return T_vir
+
+#Interpolation algorithm that matches temperature, density and redshift data from simulations to modelled data. Provides insight into the ion fraction of simulations
+def ionisation(element, mass, ion):
+	table = np.array(list(df[element][ion]))
+
+	n_H, z, T = [n for n in np.arange(-9, 2.125, 0.125)], 0, np.arange(1, 9.025, 0.025).round(3)	#Initialise length of n_H, z and T arrays
+
+	iontable = table[:,z,:]									#iontable selects all data from table for specific element and ion with z in this case being constant as we are mainly analysing data at z = 0
+
+	logdens, logtemp = np.repeat(np.array(n_H), len(T)), np.tile(np.array(T), len(n_H))	#Create repeating and tiled arrays in opposite orientations
+
+	#Interpolate. As data from ion tables are logged, so much n_H and T
+	linetable = 10**(griddata((logdens, logtemp),							#Using arrays from above to save interpolated data to
+					iontable.flatten(),						#Flatten ion table data into 1-D array
+					(np.log10(load.data['n_H']), np.log10(load.data['T']))))	#T and n_H used as metrics for interpolation
+
+	nIon = abs(((load.data['dense'] / (elementsMass[mass]*c.amu)) * load.gmet[:,mass][:len(load.ne)]) * linetable)	#Number density of specific species of element (CIII, SiVIII etc)
+	print(nIon)
+	totalIonMass = np.float64(load.data['mass'][:len(load.ne)]*load.gmet[:,mass][:len(load.ne)]*linetable)		#Total mass of the ion in the halo
+
+	totalIonMassFrac = linetable * load.gmet[:,mass][:len(load.ne)]		#Mass fraction of the ion in the halo
+
+	return nIon, totalIonMass, totalIonMassFrac	#nIon is what you need for column density, totalIonMass gives the mass of the specific ion in each cell, totalMassFrac gives the ion fraction in each cell
+
+def med_per(med, per1, per2, ion):
+
+	med.append(median(ion))
+	per1.append(median(ion) - np.nanpercentile(ion, 16))
+	per2.append(np.nanpercentile(ion, 84) - median(ion))
+
+#Binning function. Bins can be created along any property, mostly used for radial dependence of properties
+def avg_weighted(x, y, min, max, s, inc, weight):	#x and y are datasets, min and max is the minimum and maxixum x value to measure from and to, s is the starting position of the data, inc is the total
+							#number of increments you want (i.e. 200 would repeat the loop 200 times), and weight is your data to weigh if any
+	med, upper, lower, radii = np.zeros(inc), np.zeros(inc), np.zeros(inc), np.zeros(inc)
+
+	nbins = (max-min)/inc
+
+	for i in range(inc):
+		pres, = np.where((x >= s) & (x <= s+abs(nbins)))
+		if len(pres) > 0:
+			med[i]		= weighted_percentile(y[pres], weight[pres], 50)
+			upper[i]	= weighted_percentile(y[pres], weight[pres],  84)
+			lower[i]	= weighted_percentile(y[pres], weight[pres],  16)
+			radii[i]	= s
+		s += nbins
+
+	return med, upper, lower, radii
+
+def sumBins(x, y, min, max, s, inc):	#x and y are datasets, min and max is the minimum and maxixum x value to measure from and to, s is the starting position of the data, inc is the total
+							#number of increments you want (i.e. 200 would repeat the loop 200 times), and weight is your data to weigh if any
+	suM, x_axis = np.zeros(inc), np.zeros(inc)
+
+	nbins = (max-min)/inc
+
+	for i in range(inc):
+		pres, = np.where((x >= s) & (x <= s+abs(nbins)))
+		if len(pres) > 0:
+			suM[i]		= sum(y[pres])
+			x_axis[i]	= s
+		s += nbins
+
+	return suM, x_axis
+
+#This function converts the 2D grid data from get_Aslice into 1D grid data to easily plot column density data as functions of radius etc.
+def col_dens_dist(ion):
+	global ionw	#Please ignore
+
+	#Initialise 2-D arrays for the radius and column density (column density is added to a new array which this function spits out)
+	s = (len(load.data[str(ion) + 'proj']['x']), len(load.data[str(ion) + 'proj']['y']))
+
+	load.data[str(ion) + 'rad'], load.data[str(ion) + 'ionw']	= np.zeros(s), np.zeros(s)
+
+	#Iterate over x and y coordinates generated by get_Aslice. This creates a magnitude for each pixel
+	for n in range(len(load.data[str(ion) + 'proj']['x'])):
+		for m in range(len(load.data[str(ion) + 'proj']['y'])):
+			load.data[str(ion) + 'rad'][n, m]		= np.sqrt(load.data[str(ion) + 'proj']['x'][n]**2 + load.data[str(ion) + 'proj']['y'][m]**2)
+
+	#Iterate over the length of x and y coordinates again, this time to generate a new array of column density for each pixel in order for the
+	#column density values to match the position of the new array
+	for n in range(len(load.data[str(ion) + 'proj']['x'])-1):
+		for m in range(len(load.data[str(ion) + 'proj']['y'])-1):
+			load.data[str(ion) + 'ionw'][n, m]		= load.data[str(ion) + '0'][n,m]
+
+	load.data[str(ion) + 'rad'], load.data[str(ion) + 'ionw']	= load.data[str(ion) + 'rad'].flatten(), load.data[str(ion) + 'ionw'].flatten()
+
+	load.data[str(ion) + 'rad'].tolist()
+	load.data[str(ion) + 'rad'] /= virialRadius	#Normalise new radius array to virial radius of halo
+
+	#Remove any nan values from column density array
+	nan_array = np.isnan(load.data[str(ion) + 'ionw'])
+	not_nan_array = ~nan_array
+
+	load.data[str(ion) + 'ionw']	= load.data[str(ion) + 'ionw'][not_nan_array]
+	load.data[str(ion) + 'ionw'].tolist()
+
+	ionw, = np.where((load.data[str(ion) + 'rad'] <= 1))	#Create conditional where whatever the name of the radius variable is only including the virial radius
+
+	return np.log10(load.data[str(ion) + 'ionw'][ionw], where = load.data[str(ion) + 'ionw'][ionw] != 0), load.data[str(ion) + 'rad'][ionw], load.data[str(ion) + 'ionw'][ionw]
+
+#Credit to Andrew Hannington for this. Calculate the weighted percentile for a set of data
+def weighted_percentile(data, weights, perc, key="Unspecified Error key..."):
+	"""
+	Find the weighted Percentile of the data. perc should be given in
+	ercentage NOT in decimal!
+	Returns a zero value and warning if all Data (or all weights) are NaN
+	"""
+
+	# percentage to decimal
+	perc				/= 100.0
+
+	# Indices of data array in sorted form
+	ind_sorted			= np.argsort(data)
+
+	# Sort the data
+	sorted_data			= np.array(data)[ind_sorted]
+
+	# Sort the weights by the sorted data sorting
+	sorted_weights			= np.array(weights)[ind_sorted]
+
+	# Remove nan entries
+	whereDataIsNotNAN		= np.where(np.isnan(sorted_data) == False)
+
+	sorted_data, sorted_weights	= sorted_data[whereDataIsNotNAN], sorted_weights[whereDataIsNotNAN]
+
+	whereWeightsIsNotNAN		= np.where(np.isnan(sorted_weights) == False)
+	sorted_weights			= sorted_weights[whereWeightsIsNotNAN]
+
+	nDataNotNan, nWeightsNotNan	= len(sorted_data), len(sorted_weights)
+
+	if nDataNotNan > 0:
+		# Find the cumulative sum of the weights
+		cm = np.cumsum(sorted_weights)
+
+		# Find indices where cumulative some as a fraction of final cumulative sum value is greater than percentage
+		whereperc = np.where(cm / float(cm[-1]) >= perc)
+
+		# Reurn the first data value where above is true
+		out = sorted_data[whereperc[0][0]]
+	else:
+
+		print(key)
+		print("[@WeightPercent:] Warning! Data all nan! Returning 0 value!")
+
+		out = np.array([0.0])
+
+	return out
+
+#Calculates the rotational coefficient of a galaxy
+def kappa_func():
+
+	disk,		= np.where((normRadius >= 0.0) & (normRadius <= 0.30))
+
+	vel_stars	= load.data['vel'][disk][len(load.ne):]
+	pos_stars	= load.pos[disk][len(load.ne):]
+
+	v_xy_stars	= np.sqrt((vel_stars[:,1]**2) + (vel_stars[:,2]**2))
+	r_xy_stars	= np.sqrt((pos_stars[:,1]**2) + (pos_stars[:,2]**2))
+
+	j_z_stars	= vel_stars[:,1]*pos_stars[:,2] - pos_stars[:,1]*vel_stars[:,2]
+
+	D_stars		= sum(0.5*load.data['mass'][disk][len(load.ne):]*(j_z_stars/r_xy_stars)**2)
+#	D_gas		= sum(0.5*load.data['mass'][disk][:len(load.ne[r_xy_gas != 0])]*(j_z_gas[r_xy_gas != 0]/r_xy_gas[r_xy_gas != 0])**2)
+
+	T_stars		= sum(0.5*load.data['mass'][disk][len(load.ne):]*(np.sqrt(((vel_stars)**2).sum(axis = 1)))**2)
+#	T_gas		= sum(0.5*load.data['mass'][disk][:len(load.ne[r_xy_gas != 0])]*(np.sqrt(((vel_gas[r_xy_gas != 0])**2).sum(axis = 1)))**2)
+
+	kappa_rot_stars	= D_stars/T_stars
+#	kappa_rot_gas = D_gas/T_gas
+
+	kappa_stars.append(kappa_rot_stars)
+#	kappa_gas.append(kappa_rot_gas)
+
+def poly(x_val, n, *p):
+	return p[0]*x_val**n + p[1]*x_val**(n-1) + p[2]*x_val**(n-2) + p[3]
+
+def avg(x, y, min, max, s, inc, ion):
+	med, upper, lower, radii = [], [], [], []
+	nbins = (max - min)/inc
+
+	for i in range(inc):
+		pres, = np.where((x >= s) & (x <= s+abs(nbins)) & (load.data[str(ion) + 'rad'] <= 1))
+		if len(pres) > 0:
+			med.append(median(y[pres]))
+			upper.append(np.nanpercentile(y[pres], 84))
+			lower.append(np.nanpercentile(y[pres], 16))
+			radii.append(s)
+
+		s += nbins
+	return med, upper, lower, radii
+
 for i in range(len(halo_d)):
 
 	if halo_d[i] == 'level3_cgm_1e11':
@@ -166,219 +379,6 @@ for i in range(len(halo_d)):
 			print(len(stellarInitMass[0]))
 
 			noism, = np.where(load.sfr[:len(load.ne)] == 0)
-
-			# ============ FUNCTIONS ============ #
-			#Calculate the virial temperature - the average temperature of a gravitationally bound system.
-			def virialTemp(snap, halo, halo_d):
-			
-				#element number   0     1      2      3      4      5      6      7      8      9      10     11     12      13
-				elements       = ['H',  'He',  'C',   'N',   'O',   'Ne',  'Mg',  'Si',  'Fe',  'Y',   'Sr',  'Zr',  'Ba',   'Pb']
-				elements_Z     = [1,    2,     6,     7,     8,     10,    12,    14,    26,    39,    38,    40,    56,     82]
-				elementsMass  = [1.01, 4.00,  12.01, 14.01, 16.00, 20.18, 24.30, 28.08, 55.85, 88.91, 87.62, 91.22, 137.33, 207.2]
-				elements_solar = [12.0, 10.93, 8.43,  7.83,  8.69,  7.93,  7.60,  7.51,  7.50,  2.21,  2.87,  2.58,  2.18,   1.75]
-
-				m_h = 1.67e-24
-				k = 1.38e-16
-				G = 6.67e-8
-				H_0 = 2.17e-18
-				m_halo = subload.data['fmc2'][0]*1.989e43
-				meanweight = sum(load.gmet[:,0:9], axis = 1) / ( sum(load.gmet[:,0:9]/elementsMass[0:9], axis = 1) + load.ne*load.gmet[:,0] )
-				meanweight = sum(meanweight)/len(meanweight)
-
-				print(meanweight)
-				print(m_halo)
-
-				T_vir = ((G**2)*(H_0**2)*(load.omega0)*18*(np.pi**2)/54)**(1/3)*(meanweight*m_h/k)*((m_halo**(2/3))*(1+load.redshift))
-				return T_vir
-
-			#Interpolation algorithm that matches temperature, density and redshift data from simulations to modelled data. Provides insight into the ion fraction of simulations
-			def ionisation(element, mass, ion):
-				table = np.array(list(df[element][ion]))
-
-				n_H, z, T = [n for n in np.arange(-9, 2.125, 0.125)], 0, np.arange(1, 9.025, 0.025).round(3)	#Initialise length of n_H, z and T arrays
-
-				iontable = table[:,z,:]									#iontable selects all data from table for specific element and ion with z in this case being constant as we are mainly analysing data at z = 0
-
-				logdens, logtemp = np.repeat(np.array(n_H), len(T)), np.tile(np.array(T), len(n_H))	#Create repeating and tiled arrays in opposite orientations
-
-				#Interpolate. As data from ion tables are logged, so much n_H and T
-				linetable = 10**(griddata((logdens, logtemp),							#Using arrays from above to save interpolated data to
-								iontable.flatten(),						#Flatten ion table data into 1-D array
-								(np.log10(load.data['n_H']), np.log10(load.data['T']))))	#T and n_H used as metrics for interpolation
-
-				nIon = abs(((load.data['dense'] / (elementsMass[mass]*c.amu)) * load.gmet[:,mass][:len(load.ne)]) * linetable)	#Number density of specific species of element (CIII, SiVIII etc)
-				print(nIon)
-				totalIonMass = np.float64(load.data['mass'][:len(load.ne)]*load.gmet[:,mass][:len(load.ne)]*linetable)		#Total mass of the ion in the halo
-
-				totalIonMassFrac = linetable * load.gmet[:,mass][:len(load.ne)]		#Mass fraction of the ion in the halo
-
-				return nIon, totalIonMass, totalIonMassFrac	#nIon is what you need for column density, totalIonMass gives the mass of the specific ion in each cell, totalMassFrac gives the ion fraction in each cell
-			
-			def med_per(med, per1, per2, ion):
-
-				med.append(median(ion))
-				per1.append(median(ion) - np.nanpercentile(ion, 16))
-				per2.append(np.nanpercentile(ion, 84) - median(ion))
-
-			#Binning function. Bins can be created along any property, mostly used for radial dependence of properties
-			def avg_weighted(x, y, min, max, s, inc, weight):	#x and y are datasets, min and max is the minimum and maxixum x value to measure from and to, s is the starting position of the data, inc is the total
-										#number of increments you want (i.e. 200 would repeat the loop 200 times), and weight is your data to weigh if any
-				med, upper, lower, radii = np.zeros(inc), np.zeros(inc), np.zeros(inc), np.zeros(inc)
-
-				nbins = (max-min)/inc
-
-				for i in range(inc):
-					pres, = np.where((x >= s) & (x <= s+abs(nbins)))
-					if len(pres) > 0:
-						med[i]		= weighted_percentile(y[pres], weight[pres], 50)
-						upper[i]	= weighted_percentile(y[pres], weight[pres],  84)
-						lower[i]	= weighted_percentile(y[pres], weight[pres],  16)
-						radii[i]	= s
-					s += nbins
-
-				return med, upper, lower, radii
-			
-			def sumBins(x, y, min, max, s, inc):	#x and y are datasets, min and max is the minimum and maxixum x value to measure from and to, s is the starting position of the data, inc is the total
-										#number of increments you want (i.e. 200 would repeat the loop 200 times), and weight is your data to weigh if any
-				suM, x_axis = np.zeros(inc), np.zeros(inc)
-
-				nbins = (max-min)/inc
-
-				for i in range(inc):
-					pres, = np.where((x >= s) & (x <= s+abs(nbins)))
-					if len(pres) > 0:
-						suM[i]		= sum(y[pres])
-						x_axis[i]	= s
-					s += nbins
-
-				return suM, x_axis
-
-			#This function converts the 2D grid data from get_Aslice into 1D grid data to easily plot column density data as functions of radius etc.
-			def col_dens_dist(ion):
-				global ionw	#Please ignore
-
-				#Initialise 2-D arrays for the radius and column density (column density is added to a new array which this function spits out)
-				s = (len(load.data[str(ion) + 'proj']['x']), len(load.data[str(ion) + 'proj']['y']))
-
-				load.data[str(ion) + 'rad'], load.data[str(ion) + 'ionw']	= np.zeros(s), np.zeros(s)
-
-				#Iterate over x and y coordinates generated by get_Aslice. This creates a magnitude for each pixel
-				for n in range(len(load.data[str(ion) + 'proj']['x'])):
-					for m in range(len(load.data[str(ion) + 'proj']['y'])):
-						load.data[str(ion) + 'rad'][n, m]		= np.sqrt(load.data[str(ion) + 'proj']['x'][n]**2 + load.data[str(ion) + 'proj']['y'][m]**2)
-
-				#Iterate over the length of x and y coordinates again, this time to generate a new array of column density for each pixel in order for the
-				#column density values to match the position of the new array
-				for n in range(len(load.data[str(ion) + 'proj']['x'])-1):
-					for m in range(len(load.data[str(ion) + 'proj']['y'])-1):
-						load.data[str(ion) + 'ionw'][n, m]		= load.data[str(ion) + '0'][n,m]
-
-				load.data[str(ion) + 'rad'], load.data[str(ion) + 'ionw']	= load.data[str(ion) + 'rad'].flatten(), load.data[str(ion) + 'ionw'].flatten()
-
-				load.data[str(ion) + 'rad'].tolist()
-				load.data[str(ion) + 'rad'] /= virialRadius	#Normalise new radius array to virial radius of halo
-
-				#Remove any nan values from column density array
-				nan_array = np.isnan(load.data[str(ion) + 'ionw'])
-				not_nan_array = ~nan_array
-
-				load.data[str(ion) + 'ionw']	= load.data[str(ion) + 'ionw'][not_nan_array]
-				load.data[str(ion) + 'ionw'].tolist()
-
-				ionw, = np.where((load.data[str(ion) + 'rad'] <= 1))	#Create conditional where whatever the name of the radius variable is only including the virial radius
-
-				return np.log10(load.data[str(ion) + 'ionw'][ionw], where = load.data[str(ion) + 'ionw'][ionw] != 0), load.data[str(ion) + 'rad'][ionw], load.data[str(ion) + 'ionw'][ionw]
-
-			#Credit to Andrew Hannington for this. Calculate the weighted percentile for a set of data
-			def weighted_percentile(data, weights, perc, key="Unspecified Error key..."):
-				"""
-				Find the weighted Percentile of the data. perc should be given in
-				ercentage NOT in decimal!
-				Returns a zero value and warning if all Data (or all weights) are NaN
-				"""
-
-				# percentage to decimal
-				perc				/= 100.0
-
-				# Indices of data array in sorted form
-				ind_sorted			= np.argsort(data)
-
-				# Sort the data
-				sorted_data			= np.array(data)[ind_sorted]
-
-				# Sort the weights by the sorted data sorting
-				sorted_weights			= np.array(weights)[ind_sorted]
-
-				# Remove nan entries
-				whereDataIsNotNAN		= np.where(np.isnan(sorted_data) == False)
-
-				sorted_data, sorted_weights	= sorted_data[whereDataIsNotNAN], sorted_weights[whereDataIsNotNAN]
-
-				whereWeightsIsNotNAN		= np.where(np.isnan(sorted_weights) == False)
-				sorted_weights			= sorted_weights[whereWeightsIsNotNAN]
-
-				nDataNotNan, nWeightsNotNan	= len(sorted_data), len(sorted_weights)
-
-				if nDataNotNan > 0:
-					# Find the cumulative sum of the weights
-					cm = np.cumsum(sorted_weights)
-
-					# Find indices where cumulative some as a fraction of final cumulative sum value is greater than percentage
-					whereperc = np.where(cm / float(cm[-1]) >= perc)
-
-					# Reurn the first data value where above is true
-					out = sorted_data[whereperc[0][0]]
-				else:
-
-					print(key)
-					print("[@WeightPercent:] Warning! Data all nan! Returning 0 value!")
-
-					out = np.array([0.0])
-
-				return out
-
-			#Calculates the rotational coefficient of a galaxy
-			def kappa_func():
-
-				disk,		= np.where((normRadius >= 0.0) & (normRadius <= 0.30))
-
-				vel_stars	= load.data['vel'][disk][len(load.ne):]
-				pos_stars	= load.pos[disk][len(load.ne):]
-
-				v_xy_stars	= np.sqrt((vel_stars[:,1]**2) + (vel_stars[:,2]**2))
-				r_xy_stars	= np.sqrt((pos_stars[:,1]**2) + (pos_stars[:,2]**2))
-
-				j_z_stars	= vel_stars[:,1]*pos_stars[:,2] - pos_stars[:,1]*vel_stars[:,2]
-
-				D_stars		= sum(0.5*load.data['mass'][disk][len(load.ne):]*(j_z_stars/r_xy_stars)**2)
-			#	D_gas		= sum(0.5*load.data['mass'][disk][:len(load.ne[r_xy_gas != 0])]*(j_z_gas[r_xy_gas != 0]/r_xy_gas[r_xy_gas != 0])**2)
-
-				T_stars		= sum(0.5*load.data['mass'][disk][len(load.ne):]*(np.sqrt(((vel_stars)**2).sum(axis = 1)))**2)
-			#	T_gas		= sum(0.5*load.data['mass'][disk][:len(load.ne[r_xy_gas != 0])]*(np.sqrt(((vel_gas[r_xy_gas != 0])**2).sum(axis = 1)))**2)
-
-				kappa_rot_stars	= D_stars/T_stars
-			#	kappa_rot_gas = D_gas/T_gas
-
-				kappa_stars.append(kappa_rot_stars)
-			#	kappa_gas.append(kappa_rot_gas)
-
-			def poly(x_val, n, *p):
-				return p[0]*x_val**n + p[1]*x_val**(n-1) + p[2]*x_val**(n-2) + p[3]
-
-			def avg(x, y, min, max, s, inc, ion):
-				med, upper, lower, radii = [], [], [], []
-				nbins = (max - min)/inc
-
-				for i in range(inc):
-					pres, = np.where((x >= s) & (x <= s+abs(nbins)) & (load.data[str(ion) + 'rad'] <= 1))
-					if len(pres) > 0:
-						med.append(median(y[pres]))
-						upper.append(np.nanpercentile(y[pres], 84))
-						lower.append(np.nanpercentile(y[pres], 16))
-						radii.append(s)
-
-					s += nbins
-				return med, upper, lower, radii
 
 			#Table of elements. Calculations made with this table are used for metallicity or column density
 			#element number   0     1      2      3      4      5      6      7      8      9      10     11     12      13
