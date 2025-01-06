@@ -17,13 +17,9 @@ plt.switch_backend('agg')
 
 #snap = [i for i in range(50, 128, 1)]	#z = 0 @ snap = 127, z = 0.5 @ snap = 95, z = 1 @ snap = 77, z = 2 @ snap = 61
 snap	= [127]
-#h12 = 9.8msol, h9 = 10.5msol, h8 =
 halo	= ['h12_nobfield', 'h12_standard', 'h9_nobfield', 'h9_standard', 'h8_nobfield', 'h8_standard', 'h11_nobfield', 'h11_standard']
 halo_d	= ['level2_cgm_1e10', 'level3_cgm_1e11', 'level4_cgm', 'level4_cgm_1e13']
-#halo_d = ['level2_cgm_1e10']
-halo = ['h8_nobfield', 'h8_standard', 'h9_nobfield', 'h9_standard']	#1e10 halo - set 1
-#halo2 = ['h12_nobfield', 'h12_standard']	#1e10 halo - set 2
-#halo = ['h8_standard']
+halo = ['h8_nobfield', 'h8_standard', 'h9_nobfield', 'h9_standard']
 haloid	= [0]
 
 kappa_diff, kappa_med, kappa_radii									= [], [], []
@@ -128,17 +124,17 @@ for i in range(len(halo_d)):
 
 			#Investigating the birth of stars
 			stellarAge	= load.age[load.age > 0]	#Time when stars formed. load.age > 0 added to exclude wind phase gas cells. This is in terms of the scale factor
-			whereStars	= np.where(load.age > 0)
+			whereStars	= np.where(load.age > 0)	#Where stars are formed excluding wind particles.
 			birthRedshift = (1/stellarAge) - 1
 			birthMass = load.data['gima'][whereStars]*1e10
 			stellarBirthRedshift.append((1/stellarAge) - 1)
 			stellarInitMass.append(load.data['gima'][whereStars]*1e10)
 
 			#Definitions of virial radius, halo mass, halo velocity in m/s and stellar mass
-			virialRadius	= subload.data['frc2'][haloid[k]]*1e3
-			haloMass		= subload.data['fmc2'][haloid[k]]*1e10
-			haloVelocity	= subload.data['fvel'][haloid[k]]*1e3
-			stellarMass		= subload.data['fmty'][0,4]*1e10
+			virialRadius	= subload.data['frc2'][haloid[k]]*1e3	#Outer edge of the circumgalactic medium
+			haloMass	= subload.data['fmc2'][haloid[k]]*1e10	#Mass of the dark matter halo
+			haloVelocity	= subload.data['fvel'][haloid[k]]*1e3	#Total velocity of the halo for normalisation with gas cells.
+			stellarMass	= subload.data['fmty'][0,4]*1e10	#Stellar mass of the galaxy
 
 			#print(halo_d[i], halo[j], np.log10(haloMass))
 
@@ -148,8 +144,8 @@ for i in range(len(halo_d)):
 
 			#basic parameters and unit corrections
 			load.data['dist']	= np.sqrt((load.pos**2).sum(axis=1))	#magnitude of the 3D array load.data['pos']
-			normRadius			= load.data['dist']/virialRadius		#Normalise position values to virial radius
-			m_halo				= subload.data['fmc2'][haloid[k]]*1.989e33
+			normRadius		= load.data['dist']/virialRadius	#Normalise position values to virial radius
+			m_halo			= subload.data['fmc2'][haloid[k]]*1.989e33	#Halo mass in g
 
 			#Read hdf5 file for column density interpolation
 			df = h5py.File('fg2009_ss_hr.h5')
@@ -172,11 +168,9 @@ for i in range(len(halo_d)):
 			noism, = np.where(load.sfr[:len(load.ne)] == 0)
 
 			# ============ FUNCTIONS ============ #
-
+			#Calculate the virial temperature - the average temperature of a gravitationally bound system.
 			def virialTemp(snap, halo, halo_d):
-			#	subload = load_subfind(int(snap), dir = '/home/universe/spxfv/Auriga/' + halo_d + '/%s/output/' % halo)
-			#	load = gadget_readsnap(int(snap), snappath = '/home/universe/spxfv/Auriga/' + halo_d + '/%s/output/' % halo, loadonlytype=[0], loadonlyhalo=0, lazy_load=True, subfind = subload)
-
+			
 				#element number   0     1      2      3      4      5      6      7      8      9      10     11     12      13
 				elements       = ['H',  'He',  'C',   'N',   'O',   'Ne',  'Mg',  'Si',  'Fe',  'Y',   'Sr',  'Zr',  'Ba',   'Pb']
 				elements_Z     = [1,    2,     6,     7,     8,     10,    12,    14,    26,    39,    38,    40,    56,     82]
@@ -197,29 +191,28 @@ for i in range(len(halo_d)):
 				T_vir = ((G**2)*(H_0**2)*(load.omega0)*18*(np.pi**2)/54)**(1/3)*(meanweight*m_h/k)*((m_halo**(2/3))*(1+load.redshift))
 				return T_vir
 
-			#Interpolation producing column density of simulations
-			
+			#Interpolation algorithm that matches temperature, density and redshift data from simulations to modelled data. Provides insight into the ion fraction of simulations
 			def ionisation(element, mass, ion):
 				table = np.array(list(df[element][ion]))
 
-				n_H, z, T = [n for n in np.arange(-9, 2.125, 0.125)], 0, np.arange(1, 9.025, 0.025).round(3)					#Initialise length of n_H, z and T arrays
+				n_H, z, T = [n for n in np.arange(-9, 2.125, 0.125)], 0, np.arange(1, 9.025, 0.025).round(3)	#Initialise length of n_H, z and T arrays
 
-				iontable = table[:,z,:]													#iontable selects all data from table for specific element and ion with z in this case being constant as we are mainly analysing data at z = 0
+				iontable = table[:,z,:]									#iontable selects all data from table for specific element and ion with z in this case being constant as we are mainly analysing data at z = 0
 
-				logdens, logtemp = np.repeat(np.array(n_H), len(T)), np.tile(np.array(T), len(n_H))						#Create repeating and tiled arrays in opposite orientations
+				logdens, logtemp = np.repeat(np.array(n_H), len(T)), np.tile(np.array(T), len(n_H))	#Create repeating and tiled arrays in opposite orientations
 
 				#Interpolate. As data from ion tables are logged, so much n_H and T
-				linetable = 10**(griddata((logdens, logtemp),										#Using arrays from above to save interpolated data to
-								iontable.flatten(),									#Flatten ion table data into 1-D array
-								(np.log10(load.data['n_H']), np.log10(load.data['T']))))					#T and n_H used as metrics for interpolation
+				linetable = 10**(griddata((logdens, logtemp),							#Using arrays from above to save interpolated data to
+								iontable.flatten(),						#Flatten ion table data into 1-D array
+								(np.log10(load.data['n_H']), np.log10(load.data['T']))))	#T and n_H used as metrics for interpolation
 
-				nIon = abs(((load.data['dense'] / (elementsMass[mass]*c.amu)) * load.gmet[:,mass][:len(load.ne)]) * linetable)		#Number density of specific species of element (CIII, SiVIII etc)
+				nIon = abs(((load.data['dense'] / (elementsMass[mass]*c.amu)) * load.gmet[:,mass][:len(load.ne)]) * linetable)	#Number density of specific species of element (CIII, SiVIII etc)
 				print(nIon)
-				totalIonMass = np.float64(load.data['mass'][:len(load.ne)]*load.gmet[:,mass][:len(load.ne)]*linetable)			#Total mass of the ion in the halo
+				totalIonMass = np.float64(load.data['mass'][:len(load.ne)]*load.gmet[:,mass][:len(load.ne)]*linetable)		#Total mass of the ion in the halo
 
-				totalIonMassFrac = linetable * load.gmet[:,mass][:len(load.ne)]							#Mass fraction of the ion in the halo
+				totalIonMassFrac = linetable * load.gmet[:,mass][:len(load.ne)]		#Mass fraction of the ion in the halo
 
-				return nIon, totalIonMass, totalIonMassFrac										#load.data['n_element'] is what you need for column density
+				return nIon, totalIonMass, totalIonMassFrac	#nIon is what you need for column density, totalIonMass gives the mass of the specific ion in each cell, totalMassFrac gives the ion fraction in each cell
 			
 			def med_per(med, per1, per2, ion):
 
@@ -259,27 +252,8 @@ for i in range(len(halo_d)):
 					s += nbins
 
 				return suM, x_axis
-			'''
-			def avg(x, y, min, max, s, inc):	#x and y are datasets, min and max is the minimum and maxixum x value to measure from and to, s is the starting position of the data, inc is the total
-										#number of increments you want (i.e. 200 would repeat the loop 200 times), and weight is your data to weigh if any
-				med, upper, lower, radii = np.zeros(inc), np.zeros(inc), np.zeros(inc), np.zeros(inc)
-				inc = 1/nbins
 
-				for i in range(nbins-1):
-					pres, = np.where((x >= s) & (x <= s+abs(nbins)))
-					if len(pres) > 0:
-						med[i]		= median(y[pres])
-						upper[i]	= np.nanpercentile(y[pres], 84)
-						lower[i]	= np.nanpercentile(y[pres], 16)
-						radii[i]	= s
-
-					s += inc
-
-				return med, upper, lower, radii
-			'''
-
-			#Right, let me try and explain what this fucking stoopid piece of code does.
-			#This function produces radial magnitudes for the PIXELS of column density generated with get_Aslice
+			#This function converts the 2D grid data from get_Aslice into 1D grid data to easily plot column density data as functions of radius etc.
 			def col_dens_dist(ion):
 				global ionw	#Please ignore
 
@@ -440,8 +414,6 @@ for i in range(len(halo_d)):
 			gasdens					= load.rho / (c.parsec*1e6)**3. * c.msol * 1e10 									# g cm^-3
 			gasX					= load.gmet[:,0][:len(load.ne)] 											# hydrogen mass fraction
 
-			#Find radius of disk
-
 			#Calculate radial velocity for all cells
 			mag						= np.sqrt(((load.pos[:,0])**2) + ((load.pos[:,1])**2) + ((load.pos[:,2])**2))			#Magnitude of the position of each cell from the centre of the halo.
 			load.data['velocity']	= (load.vel[:,0]*load.pos[:,0]+load.vel[:,1]*load.pos[:,1]+load.vel[:,2]*load.pos[:,2])/mag	#Radial velcoity, km/s assuming no change to units above
@@ -460,30 +432,29 @@ for i in range(len(halo_d)):
 			radialVelocityHaloMass.append(np.log10(load.data['mass'][w2]))
 			convert = pixreslos*Mpcincm/1e3
 			
-			load.data['n_HI']									= ((load.data['dense'][:len(load.ne)] / (elementsMass[0]*c.amu)) * load.gmet[:,0][:len(load.ne)]) * load.data['nh'][:len(load.ne)]
-			load.data['n_CIV'], CIV_mass, CIV_mass_frac			= ionisation('C', 2, 3)
-			load.data['n_OVI'], OVI_mass, OVI_mass_frac			= ionisation('O', 4, 5)
-			load.data['n_SiII'], SiII_mass, SiII_mass_frac		= ionisation('Si', 7, 1)
+			load.data['n_HI']				= ((load.data['dense'][:len(load.ne)] / (elementsMass[0]*c.amu)) * load.gmet[:,0][:len(load.ne)]) * load.data['nh'][:len(load.ne)]
+			load.data['n_CIV'], CIV_mass, CIV_mass_frac	= ionisation('C', 2, 3)
+			load.data['n_OVI'], OVI_mass, OVI_mass_frac	= ionisation('O', 4, 5)
+			load.data['n_SiII'], SiII_mass, SiII_mass_frac	= ionisation('Si', 7, 1)
 			
 			print(len(load.data['n_HI']))
-
-			load.data['HIproj']					= load.get_Aslice("n_HI", box = [boxsize,boxsize], center = imgcent, nx = int(boxsize/pixres), ny = int(boxsize/pixres), nz = int(boxlos/pixreslos), boxz = boxlos, axes = axes, proj = True, numthreads = 8)
+			#Create projections of various ion column density. Used to compare to observational column densities
+			load.data['HIproj']				= load.get_Aslice("n_HI", box = [boxsize,boxsize], center = imgcent, nx = int(boxsize/pixres), ny = int(boxsize/pixres), nz = int(boxlos/pixreslos), boxz = boxlos, axes = axes, proj = True, numthreads = 8)
 			load.data['CIVproj']				= load.get_Aslice("n_CIV", box = [boxsize,boxsize], center = imgcent, nx = int(boxsize/pixres), ny = int(boxsize/pixres), nz = int(boxlos/pixreslos), boxz = boxlos, axes = axes, proj = True, numthreads = 8)
 			load.data['OVIproj']				= load.get_Aslice("n_OVI", box = [boxsize,boxsize], center = imgcent, nx = int(boxsize/pixres), ny = int(boxsize/pixres), nz = int(boxlos/pixreslos), boxz = boxlos, axes = axes, proj = True, numthreads = 8)
 			load.data['SiIIproj']				= load.get_Aslice("n_SiII", box = [boxsize,boxsize], center = imgcent, nx = int(boxsize/pixres), ny = int(boxsize/pixres), nz = int(boxlos/pixreslos), boxz = boxlos, axes = axes, proj = True, numthreads = 8)
-			#load.data['ismproj']        		= load.get_Aslice("sfr", box = [boxsize,boxsize], center = imgcent, nx = int(boxsize/pixres), ny = int(boxsize/pixres), nz = int(boxlos/pixreslos), boxz = boxlos, axes = axes, proj = True, numthreads = 4)
+			
+			load.data['HI0']				= load.data['HIproj']['grid']*convert
+			load.data['CIV0']				= load.data['CIVproj']['grid']*convert
+			load.data['OVI0']				= load.data['OVIproj']['grid']*convert
+			load.data['SiII0']				= load.data['SiIIproj']['grid']*convert
 
-			load.data['HI0']					= load.data['HIproj']['grid']*convert
-			load.data['CIV0']					= load.data['CIVproj']['grid']*convert
-			load.data['OVI0']					= load.data['OVIproj']['grid']*convert
-			load.data['SiII0']					= load.data['SiIIproj']['grid']*convert
+			load.data['HI']					= load.data['HIproj']['grid'].flatten()*convert
+			load.data['CIV']				= load.data['CIVproj']['grid'].flatten()*convert
+			load.data['OVI']				= load.data['OVIproj']['grid'].flatten()*convert
+			load.data['SiII']				= load.data['SiIIproj']['grid'].flatten()*convert
 
-			load.data['HI']						= load.data['HIproj']['grid'].flatten()*convert
-			load.data['CIV']					= load.data['CIVproj']['grid'].flatten()*convert
-			load.data['OVI']					= load.data['OVIproj']['grid'].flatten()*convert
-			load.data['SiII']					= load.data['SiIIproj']['grid'].flatten()*convert
-
-			load.data['HIionw'], load.data['HIrad'], _			= col_dens_dist('HI')
+			load.data['HIionw'], load.data['HIrad'], _		= col_dens_dist('HI')
 			load.data['CIVionw'], load.data['CIVrad'], _		= col_dens_dist('CIV')
 			load.data['OVIionw'], load.data['OVIrad'], _		= col_dens_dist('OVI')
 			load.data['SiIIionw'], load.data['SiIIrad'] , _		= col_dens_dist('SiII')
