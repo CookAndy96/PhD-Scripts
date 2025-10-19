@@ -12,7 +12,7 @@ from matplotlib.legend_handler import HandlerTuple
 import cmocean as cmo
 from statistics import median
 from matplotlib.ticker import AutoMinorLocator
-'''
+
 snap_string = input('Enter the snapshot number of the halo to study \n')
 snap: int = snap_string.split()
 halo_string = input('Enter the names of the haloes to analyse separated by a space \n')
@@ -26,7 +26,7 @@ halo_d = halo_d_string.split()
 location_string = input('Enter the system that contains the directory that contains the above haloes \n')
 location = location_string.split()
 print(location)
-'''
+
 halo_d = ['level3_MHD_10', 'level3_MHD_1e11', 'level3_MHD_new', 'level3_MHD']
 location_string = 'universe/spxfv/Auriga'
 
