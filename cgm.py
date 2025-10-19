@@ -37,7 +37,7 @@ def find_nearest(array, value):
     idx = (np.abs(array - value)).argmin()
     return array[idx], idx
 
-"""The following function interpolates hydrogen number density, redshift and temperature from Arepo simulations over ion tables generated with cloudy.
+"""The following function interpolates hydrogen number density, redshift and temperature from Arepo simulations over ion tables generated with cloudy (Faucher-giguere+09).
 This produces the estimated ion number density, ion mass and ion mass fraction from these simulations. The function can be used with other simulation
 codes but will likely need some tuning."""
 
